@@ -64,16 +64,50 @@ create_moonraker_venv() {
     # python 3.9.12
     test -d moonraker-env || virtualenv -p /usr/bin/python3 ~/moonraker-env
 
+    # Установка зависимостей с флагами для K2 Plus
+    echo "Installing dependencies for K2 Plus..."
+    
+    # 1. Сначала основные зависимости
     ./moonraker-env/bin/pip \
         install \
         --upgrade \
         --find-links=${SCRIPT_DIR}/wheels \
-        --requirement moonraker/scripts/moonraker-requirements.txt
-
-    ./moonraker-env/bin/pip \
-        install \
-        lmdb
-
+        --requirement moonraker/scripts/moonraker-requirements.txt \
+        --no-build-isolation
+    
+    # 2. Установка lmdb отдельно с обходным путем для cffi
+    echo "Installing lmdb (workaround for K2 Plus)..."
+    
+    # Пробуем установить без cffi
+    ./moonraker-env/bin/pip install \
+        --no-deps \
+        --no-build-isolation \
+        lmdb 2>/dev/null || \
+    {
+        echo "Trying alternative lmdb installation..."
+        # Альтернативный способ установки lmdb
+        ARCH=$(uname -m)
+        
+        if [ "$ARCH" = "aarch64" ]; then
+            # Для aarch64 пробуем скачать готовый wheel
+            echo "Downloading pre-built lmdb for aarch64..."
+            wget https://github.com/davidmaceachern/python-lmdb-arm-builds/raw/main/lmdb-1.4.1-cp39-cp39-linux_aarch64.whl -O /tmp/lmdb.whl 2>/dev/null && \
+            ./moonraker-env/bin/pip install /tmp/lmdb.whl || \
+            echo "Warning: Could not install pre-built lmdb"
+        elif [ "$ARCH" = "armv7l" ]; then
+            # Для armv7l
+            echo "Downloading pre-built lmdb for armv7l..."
+            wget https://github.com/davidmaceachern/python-lmdb-arm-builds/raw/main/lmdb-1.4.1-cp39-cp39-linux_armv7l.whl -O /tmp/lmdb.whl 2>/dev/null && \
+            ./moonraker-env/bin/pip install /tmp/lmdb.whl || \
+            echo "Warning: Could not install pre-built lmdb"
+        fi
+        
+        # Если не получилось, пробуем установить без lmdb
+        if ! ./moonraker-env/bin/python -c "import lmdb" 2>/dev/null; then
+            echo "Warning: lmdb not installed, moonraker may have limited functionality"
+        fi
+    }
+    
     python3 ${SCRIPT_DIR}/../../scripts/fix_venv.py ~/moonraker-env
 }
 
@@ -125,6 +159,32 @@ wait_for_moonraker() {
     done
 }
 
+# Установка системных зависимостей для cffi
+install_system_deps() {
+    progress "Installing system dependencies for K2 Plus..."
+    
+    # Проверяем и устанавливаем системные пакеты для сборки cffi
+    for pkg in python3-dev gcc musl-dev libffi-dev; do
+        if opkg list-installed | grep -q "^${pkg}"; then
+            echo "Package ${pkg} already installed"
+        else
+            echo "Installing ${pkg}..."
+            opkg install ${pkg} 2>/dev/null || echo "Warning: Could not install ${pkg}"
+        fi
+    done
+    
+    # Обновляем pip и устанавливаем cffi системно
+    pip install --upgrade pip setuptools wheel 2>/dev/null || true
+    
+    # Пробуем установить cffi системно
+    echo "Installing cffi system-wide..."
+    pip install cffi --no-build-isolation 2>/dev/null || \
+    pip install --no-deps cffi 2>/dev/null || \
+    echo "Warning: Could not install cffi, trying to continue..."
+}
+
+# Главная установка
+install_system_deps
 install_virtualenv
 remove_legacy_symlinks
 fetch_moonraker
@@ -133,3 +193,8 @@ install_libs
 modify_moonraker_asvc
 replace_moonraker
 wait_for_moonraker
+
+echo "========================================"
+echo "Moonraker installation for K2 Plus completed!"
+echo "Note: lmdb may not be fully functional"
+echo "========================================"
