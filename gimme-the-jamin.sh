@@ -4,6 +4,13 @@ set -xe
 
 SCRIPT_DIR=$(readlink -f $(dirname ${0}))
 
+# Установка системных пакетов перед началом
+if command -v opkg >/dev/null 2>&1; then
+    echo "Pre-installing system packages for K2 Plus..."
+    opkg update 2>/dev/null || true
+    opkg install python3 python3-pip git 2>/dev/null || true
+fi
+
 install_feature() {
     FEATURE=${1}
     if [ ! -f /tmp/${FEATURE} ]; then
